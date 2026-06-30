@@ -7,6 +7,8 @@ batch, and watch per-worker results stream in — even when the payment provider
 
 **Stack:** Go (backend) · Vue 3 + TypeScript (frontend) · optional Postgres/Supabase for durable state.
 
+![Dashboard — a settled batch with partial failures](docs/dashboard.png)
+
 ---
 
 ## Run it
