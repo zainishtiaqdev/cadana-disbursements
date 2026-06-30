@@ -48,6 +48,21 @@ pick this repo, then set the `DATABASE_URL` secret when prompted.
 
 Note the backend URL, e.g. `https://cadana-disbursements-api.onrender.com`.
 
+### Alternative — Fly.io (always-on; needs a card, no local Docker)
+
+The repo ships `backend/Dockerfile` + `backend/fly.toml`; Fly builds the image **remotely**.
+
+```bash
+brew install flyctl            # or: curl -L https://fly.io/install.sh | sh
+fly auth login
+cd backend
+fly launch                     # pick a unique app name + region; reuse the bundled fly.toml; skip deploy for now
+fly secrets set DATABASE_URL="<supabase session pooler URI>"   # ALLOWED_ORIGIN is already in fly.toml
+fly deploy
+```
+
+Gives `https://<app>.fly.dev` with HTTPS already on. Use that as `VITE_API_BASE` in the Vercel step.
+
 ## 3 · Frontend → Vercel
 
 - **New Project** → import the repo.
