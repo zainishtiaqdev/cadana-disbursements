@@ -97,5 +97,4 @@ CI runs the same suite under `-race` on every push — see the **Actions** tab.
 ```
 backend/    Go service — cmd/server + internal/{api,disbursement,store,provider}
 frontend/   Vue 3 + TS SPA — api · composables · components
-docs/       architecture.html — system + flow diagrams
 ```
