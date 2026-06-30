@@ -1,0 +1,16 @@
+# Render blueprint — backend web service (Go).
+# New → Blueprint → pick this repo, then set DATABASE_URL (Session pooler URI) in the dashboard.
+services:
+  - type: web
+    name: cadana-disbursements-api
+    runtime: go
+    rootDir: backend
+    plan: free
+    buildCommand: go build -o server ./cmd/server
+    startCommand: ./server
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false # secret — set in the dashboard (Supabase Session pooler URI)
+      - key: ALLOWED_ORIGIN
+        value: "*"

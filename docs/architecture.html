@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cadana · Disbursements — Architecture &amp; Design</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #131a2e;
+        --ink: #e7ecf5;
+        --muted: #93a0bd;
+        --brand: #6ea8fe;
+        --line: #243049;
+        --good: #34d399;
+        --bad: #f87171;
+        --warn: #fbbf24;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      .wrap { max-width: 980px; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+      header.hero { border-bottom: 1px solid var(--line); padding-bottom: 1.5rem; margin-bottom: 2rem; }
+      .kicker { color: var(--brand); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.75rem; }
+      h1 { margin: 0.3rem 0 0.4rem; font-size: 2rem; letter-spacing: -0.02em; }
+      h2 { margin: 2.6rem 0 0.6rem; font-size: 1.3rem; }
+      h2::before { content: "▸ "; color: var(--brand); }
+      h3 { margin: 1.4rem 0 0.4rem; font-size: 1.02rem; color: #cdd6ea; }
+      p, li { color: #d7deee; }
+      .lede { color: var(--muted); font-size: 1.05rem; }
+      a { color: var(--brand); }
+      code, kbd {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #0e1426; border: 1px solid var(--line); border-radius: 5px;
+        padding: 0.05rem 0.35rem; font-size: 0.88em; color: #cfe0ff;
+      }
+      .panel {
+        background: var(--panel); border: 1px solid var(--line);
+        border-radius: 14px; padding: 1.1rem 1.25rem; margin: 1rem 0;
+      }
+      .mermaid { background: #f7f9fc; border-radius: 12px; padding: 1.1rem; margin: 1rem 0; overflow-x: auto; }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+      @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+      table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.92rem; }
+      th, td { text-align: left; padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; }
+      .tag { display: inline-block; font-size: 0.72rem; font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 999px; }
+      .tag.good { background: rgba(52,211,153,0.15); color: var(--good); }
+      .tag.warn { background: rgba(251,191,36,0.15); color: var(--warn); }
+      ul.tight { margin: 0.3rem 0; padding-left: 1.2rem; }
+      .toc { columns: 2; font-size: 0.92rem; }
+      @media (max-width: 600px) { .toc { columns: 1; } }
+      .toc a { display: block; padding: 0.15rem 0; color: #c3cfe8; text-decoration: none; }
+      .note { border-left: 3px solid var(--brand); padding: 0.4rem 0 0.4rem 0.9rem; color: var(--muted); }
+      footer { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="hero">
+        <div class="kicker">Cadana · Take-home</div>
+        <h1>Disbursements — Architecture &amp; Design</h1>
+        <p class="lede">
+          A payroll-ops dashboard: review pending payouts, run a batch, and watch per-worker results
+          land live — built to stay correct when the payment provider flakes. Go backend, Vue 3 + TS
+          frontend, optional Postgres for durable state.
+        </p>
+      </header>
+
+      <div class="panel toc">
+        <a href="#overview">1 · System overview</a>
+        <a href="#lifecycle">2 · Request lifecycle</a>
+        <a href="#idempotency">3 · Idempotency</a>
+        <a href="#concurrency">4 · Concurrency model</a>
+        <a href="#data">5 · Data &amp; status model</a>
+        <a href="#frontend">6 · Frontend reactivity</a>
+        <a href="#structure">7 · Code structure</a>
+        <a href="#decisions">8 · Decisions &amp; trade-offs</a>
+      </div>
+
+      <h2 id="overview">1 · System overview</h2>
+      <p>
+        Three tiers. The browser holds only UI state and talks to one Go service over a tiny JSON API.
+        The service owns all business logic and writes through a <code>Store</code> interface that has two
+        adapters: an in-memory map (the zero-setup default) and Postgres (durable, for the live demo).
+        The payment rail is an interface too, so it can be a flaky mock in dev and a deterministic stub
+        in tests.
+      </p>
+      <pre class="mermaid">
+flowchart LR
+  subgraph B["Browser"]
+    UI["Vue 3 SPA<br/>composables + components"]
+  end
+  subgraph API["Go service · Render/Fly"]
+    H["HTTP handlers<br/>(thin transport)"] --> SVC["disbursement.Service<br/>(business logic)"]
+    SVC --> ST{"Store<br/>interface"}
+    SVC --> PR["PaymentProvider<br/>interface"]
+    PR --> MOCK["mock rail<br/>50–200ms · ~30% fail"]
+  end
+  ST -->|"default"| MEM[("in-memory<br/>RWMutex")]
+  ST -->|"DATABASE_URL set"| PG[("Postgres / Supabase")]
+  UI -->|"GET /workers<br/>POST /disbursements<br/>GET /disbursements/:id"| H
+      </pre>
+      <p class="note">
+        Why a single long-running Go process (not serverless): idempotency and batch state live behind
+        the <code>Store</code>. With the in-memory adapter that state is in-process, so the API must be one
+        instance. With Postgres it is durable and could scale horizontally — the same interface, no logic
+        change.
+      </p>
+
+      <h2 id="lifecycle">2 · Request lifecycle</h2>
+      <p>
+        <code>POST</code> accepts the work and returns immediately; payment happens in the background so the
+        provider's latency never blocks the request. The UI then polls until every row has settled — which
+        is exactly what makes failures and timing <em>visible</em> to the operator.
+      </p>
+      <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant U as Vue SPA
+  participant A as Go API
+  participant S as Service
+  participant P as Provider
+  U->>A: POST /disbursements {batch_id, worker_ids}
+  A->>S: Submit(batch_id, ids)
+  S->>S: CreateBatch — create-if-absent
+  alt new batch_id
+    S-->>A: batch (all pending)
+    A-->>U: 202 Accepted
+    par background, bounded fan-out
+      S->>P: Pay(worker A)
+      S->>P: Pay(worker B)
+      S->>P: Pay(worker …)
+    end
+    P-->>S: txn id / error per worker
+  else existing batch_id
+    S-->>A: existing batch (provider NOT called)
+    A-->>U: 202 Accepted
+  end
+  loop poll until no row is pending
+    U->>A: GET /disbursements/:batch_id
+    A-->>U: current per-worker status
+  end
+      </pre>
+
+      <h2 id="idempotency">3 · Idempotency — the crux</h2>
+      <p>
+        <code>batch_id</code> is supplied by the client and used as an idempotency key (the same pattern as
+        a Stripe idempotency key). Creating a batch is an <strong>atomic create-if-absent</strong>; a
+        resubmission of the same id returns the existing batch and never touches the provider — so a retry,
+        a double-click, or a network replay can't double-pay.
+      </p>
+      <pre class="mermaid">
+flowchart TD
+  R["POST /disbursements (batch_id)"] --> C{"batch_id already exists?"}
+  C -->|"no — first time"| N["insert batch + N pending rows<br/>spawn async payment"] --> OK["202 · all pending"]
+  C -->|"yes — replay"| E["return existing batch<br/>provider is NOT called"] --> OK2["202 · current state"]
+      </pre>
+      <div class="grid2">
+        <div class="panel">
+          <h3>In-memory</h3>
+          <p>A single <code>RWMutex</code> guards the batch map; <code>CreateBatch</code> checks-and-inserts
+          under the lock, so concurrent identical submits resolve to exactly one creator.</p>
+        </div>
+        <div class="panel">
+          <h3>Postgres</h3>
+          <p><code>INSERT INTO batches(id) … ON CONFLICT DO NOTHING</code>. The primary key <em>is</em> the
+          idempotency guarantee — it holds across restarts and across multiple instances, not just within
+          one process.</p>
+        </div>
+      </div>
+      <p class="note">Retrying failed workers re-batches them under a <em>new</em> id. Already-paid workers
+        are never in that set, so there is nothing to double-pay.</p>
+
+      <h2 id="concurrency">4 · Concurrency model</h2>
+      <p>
+        A batch fans out to one goroutine per worker, capped by a semaphore so we never stampede the
+        provider, and joined with a <code>WaitGroup</code>. Each result is written under the store lock.
+        One worker failing is just one <code>failed</code> row — it never blocks or rolls back the others.
+        The whole suite runs under <code>go test -race</code>.
+      </p>
+      <pre class="mermaid">
+flowchart LR
+  B["batch · N workers"] --> F["fan-out<br/>1 goroutine / worker"]
+  F --> SEM["semaphore<br/>cap = 5"]
+  SEM --> PAY["provider.Pay(ctx)"]
+  PAY -->|"ok"| US["UpdateResult: success + txn id"]
+  PAY -->|"error"| UF["UpdateResult: failed + reason"]
+  US --> WG["WaitGroup join"]
+  UF --> WG
+      </pre>
+
+      <h2 id="data">5 · Data &amp; status model</h2>
+      <div class="grid2">
+        <div>
+          <h3>Tables (Postgres adapter)</h3>
+          <pre class="mermaid">
+erDiagram
+  batches ||--o{ disbursements : contains
+  batches {
+    text id PK
+    timestamptz created_at
+  }
+  disbursements {
+    text batch_id FK
+    text worker_id
+    int ord
+    text status
+    text provider_txn_id
+    text error
+  }
+          </pre>
+        </div>
+        <div>
+          <h3>Disbursement status</h3>
+          <pre class="mermaid">
+stateDiagram-v2
+  [*] --> pending
+  pending --> success: provider returns txn id
+  pending --> failed: provider error
+  success --> [*]
+  failed --> [*]
+          </pre>
+          <p>Money is <code>shopspring/decimal</code> in Go and a <strong>string</strong> on the wire — no
+          <code>float64</code> ever touches an amount. The frontend formats with
+          <code>Intl.NumberFormat</code>.</p>
+        </div>
+      </div>
+
+      <h2 id="frontend">6 · Frontend reactivity</h2>
+      <p>State lives in composables, not components. Raw server data is held in <code>ref</code>s;
+        everything derived is <code>computed</code>, so the summary and the failed-set can never drift out
+        of sync with the rows.</p>
+      <table>
+        <tr><th>Piece</th><th>Kind</th><th>Why</th></tr>
+        <tr><td><code>results</code></td><td>ref</td><td>raw server truth, replaced on each poll</td></tr>
+        <tr><td><code>summary</code></td><td>computed</td><td>counts derived from <code>results</code> — single source</td></tr>
+        <tr><td><code>failedWorkerIds</code></td><td>computed</td><td>drives the "Retry failed" action</td></tr>
+        <tr><td><code>useWorkers</code></td><td>composable</td><td>roster fetch + loading/error, reused independently</td></tr>
+        <tr><td><code>useDisbursementBatch</code></td><td>composable</td><td>owns submit → poll → cleanup; <code>onScopeDispose</code> clears the timer</td></tr>
+      </table>
+      <p>The API contract is one hand-written module (<code>types/api.ts</code>) mirroring the Go DTOs — a
+        single source of truth, chosen over codegen because the surface is tiny and stable.</p>
+
+      <h2 id="structure">7 · Code structure</h2>
+      <div class="grid2">
+        <div class="panel">
+          <h3>backend/</h3>
+          <pre><code>cmd/server/main.go        wiring + graceful shutdown
+internal/
+  api/        handlers, router, DTOs (thin)
+  disbursement/
+    service.go   concurrency + idempotency
+    model.go     Worker, Batch, Status
+    store.go     Store interface (the port)
+  store/
+    memory.go    in-memory adapter
+    postgres.go  Postgres adapter
+    schema.sql   self-bootstrapping DDL
+  provider/   PaymentProvider + flaky mock</code></pre>
+        </div>
+        <div class="panel">
+          <h3>frontend/src/</h3>
+          <pre><code>types/api.ts        shared wire contract
+api/client.ts       typed fetch wrapper
+composables/
+  useWorkers.ts
+  useDisbursementBatch.ts
+components/
+  WorkerList · WorkerRow
+  DisbursementTable
+  BatchSummary · StatusBadge
+App.vue             orchestration only</code></pre>
+        </div>
+      </div>
+
+      <h2 id="decisions">8 · Decisions &amp; trade-offs</h2>
+      <table>
+        <tr><th>Decision</th><th>Why</th><th></th></tr>
+        <tr><td>Client-supplied <code>batch_id</code> as idempotency key</td><td>Makes "don't double-pay on resubmit" provable and testable; mirrors real payment APIs.</td><td><span class="tag good">core</span></td></tr>
+        <tr><td>Async processing + polling</td><td>Surfaces provider latency &amp; failures to the operator instead of hiding them in one slow request. Brief allows polling.</td><td><span class="tag good">core</span></td></tr>
+        <tr><td><code>shopspring/decimal</code>, string on the wire</td><td>No float rounding on money, across multiple currencies.</td><td><span class="tag good">core</span></td></tr>
+        <tr><td>Store behind an interface; in-memory default</td><td>One-command local run (honors the brief) <em>and</em> a durable path for the demo — no logic changes between them.</td><td><span class="tag good">core</span></td></tr>
+        <tr><td>Polling, not SSE/WebSocket push</td><td>Time-box trade-off: simpler, fewer moving parts, adequate at this scale. Push would cut redundant requests.</td><td><span class="tag warn">trade-off</span></td></tr>
+        <tr><td>Hand-written shared types (no codegen)</td><td>Tiny, stable surface — one type module is simpler than an OpenAPI pipeline here.</td><td><span class="tag warn">trade-off</span></td></tr>
+      </table>
+
+      <footer>
+        Cadana take-home · Zain Ishtiaq · Go + Vue 3 + TS. Diagrams render with Mermaid; open this file in
+        any browser.
+      </footer>
+    </div>
+
+    <script type="module">
+      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs'
+      mermaid.initialize({ startOnLoad: true, theme: 'neutral' })
+    </script>
+  </body>
+</html>
