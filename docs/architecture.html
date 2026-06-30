@@ -95,7 +95,7 @@ flowchart LR
   subgraph B["Browser"]
     UI["Vue 3 SPA<br/>composables + components"]
   end
-  subgraph API["Go service · Render/Fly"]
+  subgraph API["Go service"]
     H["HTTP handlers<br/>(thin transport)"] --> SVC["disbursement.Service<br/>(business logic)"]
     SVC --> ST{"Store<br/>interface"}
     SVC --> PR["PaymentProvider<br/>interface"]

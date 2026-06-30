@@ -92,16 +92,10 @@ CI runs the same suite under `-race` on every push — see the **Actions** tab.
 
 ---
 
-## Deploy
-
-See **[DEPLOY.md](./DEPLOY.md)** — frontend on Vercel, backend on Render/Fly, database on Supabase.
-A live demo is a ~10-minute click-through.
-
 ## Layout
 
 ```
 backend/    Go service — cmd/server + internal/{api,disbursement,store,provider}
 frontend/   Vue 3 + TS SPA — api · composables · components
 docs/       architecture.html — system + flow diagrams
-DEMO.md     demo walkthrough + talking points
 ```
