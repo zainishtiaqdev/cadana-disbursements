@@ -7,6 +7,8 @@ batch, and watch per-worker results stream in — even when the payment provider
 
 **Stack:** Go (backend) · Vue 3 + TypeScript (frontend) · optional Postgres/Supabase for durable state.
 
+**Live demo:** https://cadana.zainishtiaq.com &nbsp;·&nbsp; **API:** https://api.cadana.zainishtiaq.com
+
 ![Dashboard — a settled batch with partial failures](docs/dashboard.png)
 
 ---
@@ -52,28 +54,27 @@ cd backend && make run                 # logs "store: postgres"
 
 ## Design notes
 
-- **Idempotency** is keyed on the client-supplied `batch_id` (Stripe-style). Creating a batch is an
-  atomic *create-if-absent*; resubmitting the same id returns the existing batch and never calls the
-  provider again. In Postgres that's the `batches(id)` primary key with `INSERT … ON CONFLICT DO
-  NOTHING`, so the guarantee holds across restarts and across processes.
-- **Concurrency:** a batch is paid by one goroutine per worker, bounded by a semaphore and joined with
-  a `WaitGroup`; the in-memory store is guarded by an `RWMutex`. A failure on one worker never blocks
-  the others. The suite runs under `-race`.
-- **Async + polling:** `POST` returns `202` immediately with every row `pending` and processes in the
-  background; the UI polls `GET` until nothing is pending. That's what makes the provider's latency
-  and ~30% failures *visible* instead of hidden inside one long request.
-- **Money** is `shopspring/decimal` end to end and crosses the wire as a string — no `float64` ever
-  touches an amount.
-- **Storage behind an interface:** in-memory is the zero-setup default (one command, honors the
-  brief); the Postgres adapter implements the same `Store` port and powers durable idempotency + the
-  live demo. Tests run against the in-memory store, so CI needs no database.
-- **Frontend state** lives in composables: `useDisbursementBatch` owns the batch lifecycle (submit,
-  poll, cleanup), raw server data is held in `ref`s, and everything derived (the summary, the failed
-  set) is `computed` so it can't drift. The API contract is hand-written and shared as one type module.
+```mermaid
+flowchart LR
+  UI["Vue SPA<br/>composables + polling"]
+  subgraph server["Go service"]
+    API["HTTP handlers"] --> SVC["Service<br/>idempotency + concurrency"]
+    SVC -->|"1 goroutine / worker<br/>(bounded)"| P["Payment provider<br/>(flaky mock)"]
+    SVC --> ST{"Store interface"}
+  end
+  ST -->|default| MEM[("in-memory")]
+  ST -->|DATABASE_URL| PG[("Postgres<br/>(durable)")]
+  UI <-->|"202 + poll GET"| API
+```
 
-**Trade-off (given the ~1.5h box):** live status is **polled**, not pushed. Polling is simple and the
-brief allows it; with more time I'd push updates over SSE/WebSocket to cut redundant requests and
-tighten latency — not worth the extra moving parts at this scale.
+- **Idempotency** — client-supplied `batch_id` is the key; create-if-absent means a resubmit returns the existing batch and never re-pays (Postgres: `UNIQUE` + `ON CONFLICT`, so it survives restarts).
+- **Concurrency** — one goroutine per worker, semaphore-bounded, joined by `WaitGroup`; one failure never blocks the rest. Verified under `-race`.
+- **Async + polling** — `POST` returns `202` instantly and pays in the background; the UI polls until settled, keeping provider latency and failures visible.
+- **Money** — `shopspring/decimal` end to end, string on the wire — no `float64` ever touches an amount.
+- **Storage** — a `Store` interface: in-memory by default (one-command run), Postgres optional for durable idempotency.
+- **Frontend** — composables own state; `ref` for server data, `computed` for derived values; API types shared as one module.
+
+**Trade-off:** status is **polled**, not pushed (SSE/WebSocket) — simpler and fine at this scale; push would cut redundant requests.
 
 ---
 
